@@ -169,7 +169,7 @@ def main():
     save_checkpoint({
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
-        }, is_best, filename=os.path.join(args.save_dir, 'randomizer.th'))
+        }, True, filename=os.path.join(args.save_dir, 'randomizer.th'))
     return
 
     if args.arch in ['resnet1202', 'resnet110']:
