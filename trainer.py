@@ -111,13 +111,13 @@ def main():
     
     # create sets - n/8 * len(data) for n(1,8)
 
-    eighth = list(range(0, len(train_set_full)/8))
-    quarter = list(range(0, len(train_set_full)/4))
-    three_eighth = list(range(0, len(train_set_full)*(3/8)))
-    half = list(range(0, len(train_set_full)/2))
-    five_eighth = list(range(0, len(train_set_full)*(5/8)))
-    three_quarter = list(range(0, len(train_set_full)*(3/4)))
-    seven_eighth = list(range(0, len(train_set_full)*(7/8)))
+    eighth = list(range(0, int(len(train_set_full)/8)))
+    quarter = list(range(0, int(len(train_set_full)/4)))
+    three_eighth = list(range(0, int(len(train_set_full)*(3/8))))
+    half = list(range(0, int(len(train_set_full)/2)))
+    five_eighth = list(range(0, int(len(train_set_full)*(5/8))))
+    three_quarter = list(range(0, int(len(train_set_full)*(3/4))))
+    seven_eighth = list(range(0, int(len(train_set_full)*(7/8))))
 
     trainset_1_8 = torch.utils.data.Subset(train_set_full, eighth)
     trainset_2_8 = torch.utils.data.Subset(train_set_full, quarter)
