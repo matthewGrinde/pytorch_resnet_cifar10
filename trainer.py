@@ -111,13 +111,13 @@ def main():
     
     # create sets - n/8 * len(data) for n(1,8)
 
-    eighth = list(range(0, len(train_set_full)))
-    quarter = list(range(0, len(train_set_full)))
-    three_eighth = list(range(0, len(train_set_full)))
-    half = list(range(0, len(train_set_full)))
-    five_eighth = list(range(0, len(train_set_full)))
-    three_quarter = list(range(0, len(train_set_full)))
-    seven_eighth = list(range(0, len(train_set_full)))
+    eighth = list(range(0, len(train_set_full)/8))
+    quarter = list(range(0, len(train_set_full)/4))
+    three_eighth = list(range(0, len(train_set_full)*(3/8)))
+    half = list(range(0, len(train_set_full)/2))
+    five_eighth = list(range(0, len(train_set_full)*(5/8)))
+    three_quarter = list(range(0, len(train_set_full)*(3/4)))
+    seven_eighth = list(range(0, len(train_set_full)*(7/8)))
 
     trainset_1_8 = torch.utils.data.Subset(train_set_full, eighth)
     trainset_2_8 = torch.utils.data.Subset(train_set_full, quarter)
@@ -165,6 +165,12 @@ def main():
 
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
                                                         milestones=[100, 150], last_epoch=args.start_epoch - 1)
+
+    save_checkpoint({
+            'state_dict': model.state_dict(),
+            'best_prec1': best_prec1,
+        }, is_best, filename=os.path.join(args.save_dir, 'randomizer.th'))
+    return
 
     if args.arch in ['resnet1202', 'resnet110']:
         # for resnet1202 original paper uses lr=0.01 for first 400 minibatches for warm-up
