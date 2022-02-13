@@ -3,6 +3,7 @@ import os
 import shutil
 import time
 
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -55,13 +56,16 @@ parser.add_argument('--save-dir', dest='save_dir',
 parser.add_argument('--save-every', dest='save_every',
                     help='Saves checkpoints at every specified number of epochs',
                     type=int, default=10)
+parser.add_argument('--seed', dest='seed',
+                    help='saves checkpoints at every specified number of epochs',
+                    type=int, default=42)
 best_prec1 = 0
 
 
 def main():
     global args, best_prec1
     args = parser.parse_args()
-
+    set_seed(args.seed)
 
     # Check the save_dir exists or not
     if not os.path.exists(args.save_dir):
@@ -88,15 +92,57 @@ def main():
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
-    train_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR10(root='./data', train=True, transform=transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, 4),
-            transforms.ToTensor(),
+    # train_loader = torch.utils.data.DataLoader(
+    #     datasets.CIFAR10(root='./data', train=True, transform=transforms.Compose([
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.RandomCrop(32, 4),
+    #         transforms.ToTensor(),
+    #         normalize,
+    #     ]), download=True),
+    #     batch_size=args.batch_size, shuffle=True,
+    #     num_workers=args.workers, pin_memory=True)
+
+    train_set_full = datasets.CIFAR10(root='./data', train=True, transform=transforms.Compose([
+            # transforms.RandomHorizontalFlip(),
+            # transforms.RandomCrop(32, 4),
+            # transforms.ToTensor(),
             normalize,
-        ]), download=True),
-        batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=True)
+        ]), download=True)
+    
+    # create sets - n/8 * len(data) for n(1,8)
+
+    eighth = list(range(0, len(train_set_full)))
+    quarter = list(range(0, len(train_set_full)))
+    three_eighth = list(range(0, len(train_set_full)))
+    half = list(range(0, len(train_set_full)))
+    five_eighth = list(range(0, len(train_set_full)))
+    three_quarter = list(range(0, len(train_set_full)))
+    seven_eighth = list(range(0, len(train_set_full)))
+
+    trainset_1_8 = torch.utils.data.Subset(train_set_full, eighth)
+    trainset_2_8 = torch.utils.data.Subset(train_set_full, quarter)
+    trainset_3_8 = torch.utils.data.Subset(train_set_full, three_eighth)
+    trainset_4_8 = torch.utils.data.Subset(train_set_full, half)
+    trainset_5_8 = torch.utils.data.Subset(train_set_full, five_eighth)
+    trainset_6_8 = torch.utils.data.Subset(train_set_full, three_quarter)
+    trainset_7_8 = torch.utils.data.Subset(train_set_full, seven_eighth)
+
+    trainloader_1_8 = torch.utils.data.DataLoader(trainset_1_8, batch_size=128,
+                                                shuffle=True, num_workers=4)
+    trainloader_2_8 = torch.utils.data.DataLoader(trainset_2_8, batch_size=128,
+                                                shuffle=True, num_workers=4)
+    trainloader_3_8 = torch.utils.data.DataLoader(trainset_3_8, batch_size=128,
+                                                shuffle=True, num_workers=4)
+    trainloader_4_8 = torch.utils.data.DataLoader(trainset_4_8, batch_size=128,
+                                                shuffle=True, num_workers=4)
+    trainloader_5_8 = torch.utils.data.DataLoader(trainset_5_8, batch_size=128,
+                                                shuffle=True, num_workers=4)
+    trainloader_6_8 = torch.utils.data.DataLoader(trainset_6_8, batch_size=128,
+                                                shuffle=True, num_workers=4)
+    trainloader_7_8 = torch.utils.data.DataLoader(trainset_7_8, batch_size=128,
+                                                shuffle=True, num_workers=4)
+    trainloader_8_8 = torch.utils.data.DataLoader(train_set_full, batch_size=128,
+                                                shuffle=True, num_workers=4)                                                                                       
 
     val_loader = torch.utils.data.DataLoader(
         datasets.CIFAR10(root='./data', train=False, transform=transforms.Compose([
@@ -301,6 +347,18 @@ def accuracy(output, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
+def set_seed(seed):
+    #random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    #np.random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    # making sure GPU runs are deterministic even if they are slower
+    torch.backends.cudnn.deterministic = True
+    # this causes the code to vary across runs. I don't want that for now.
+    # torch.backends.cudnn.benchmark = True
+    print("Seeded everything: {}".format(seed))
 
 if __name__ == '__main__':
     main()
