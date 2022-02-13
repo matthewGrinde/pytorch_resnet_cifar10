@@ -1,5 +1,8 @@
 import argparse
+from ast import arg
+import copy
 import os
+from posixpath import split
 import shutil
 import time
 
@@ -13,6 +16,7 @@ import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import resnet
+import copy
 
 model_names = sorted(name for name in resnet.__dict__
     if name.islower() and not name.startswith("__")
@@ -58,7 +62,10 @@ parser.add_argument('--save-every', dest='save_every',
                     type=int, default=10)
 parser.add_argument('--seed', dest='seed',
                     help='saves checkpoints at every specified number of epochs',
-                    type=int, default=42)
+                    type=int, default=44)
+parser.add_argument('--ratio', dest='ratio',
+                    help='saves checkpoints at every specified number of epochs',
+                    type=float, default=1.0)
 best_prec1 = 0
 
 
@@ -66,26 +73,34 @@ def main():
     global args, best_prec1
     args = parser.parse_args()
     set_seed(args.seed)
-
+    epoch_list, rand_test_acc_list, norm_test_acc_list = [], [], []
     # Check the save_dir exists or not
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
 
-    model = torch.nn.DataParallel(resnet.__dict__[args.arch]())
-    model.cuda()
+    # random network to augment the cifar output
+    gen_net = torch.nn.DataParallel(resnet.__dict__[args.arch]())
+    gen_net.load_state_dict(torch.load('save_resnet20/randomizer.th')['state_dict'])
+    gen_net.eval()
+
+    # models I will train
+    norm_model = torch.nn.DataParallel(resnet.__dict__[args.arch]())
+    rand_model = copy.deepcopy(norm_model)
+    norm_model.cuda()
+    rand_model.cuda()
 
     # optionally resume from a checkpoint
-    if args.resume:
-        if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume)
-            args.start_epoch = checkpoint['epoch']
-            best_prec1 = checkpoint['best_prec1']
-            model.load_state_dict(checkpoint['state_dict'])
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.evaluate, checkpoint['epoch']))
-        else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
+    # if args.resume:
+    #     if os.path.isfile(args.resume):
+    #         print("=> loading checkpoint '{}'".format(args.resume))
+    #         checkpoint = torch.load(args.resume)
+    #         args.start_epoch = checkpoint['epoch']
+    #         best_prec1 = checkpoint['best_prec1']
+    #         model.load_state_dict(checkpoint['state_dict'])
+    #         print("=> loaded checkpoint '{}' (epoch {})"
+    #               .format(args.evaluate, checkpoint['epoch']))
+    #     else:
+    #         print("=> no checkpoint found at '{}'".format(args.resume))
 
     cudnn.benchmark = True
 
@@ -111,38 +126,13 @@ def main():
     
     # create sets - n/8 * len(data) for n(1,8)
 
-    eighth = list(range(0, int(len(train_set_full)/8)))
-    quarter = list(range(0, int(len(train_set_full)/4)))
-    three_eighth = list(range(0, int(len(train_set_full)*(3/8))))
-    half = list(range(0, int(len(train_set_full)/2)))
-    five_eighth = list(range(0, int(len(train_set_full)*(5/8))))
-    three_quarter = list(range(0, int(len(train_set_full)*(3/4))))
-    seven_eighth = list(range(0, int(len(train_set_full)*(7/8))))
+    split = list(range(0, int(len(train_set_full)*args.ratio)))
 
-    trainset_1_8 = torch.utils.data.Subset(train_set_full, eighth)
-    trainset_2_8 = torch.utils.data.Subset(train_set_full, quarter)
-    trainset_3_8 = torch.utils.data.Subset(train_set_full, three_eighth)
-    trainset_4_8 = torch.utils.data.Subset(train_set_full, half)
-    trainset_5_8 = torch.utils.data.Subset(train_set_full, five_eighth)
-    trainset_6_8 = torch.utils.data.Subset(train_set_full, three_quarter)
-    trainset_7_8 = torch.utils.data.Subset(train_set_full, seven_eighth)
+    trainset = torch.utils.data.Subset(train_set_full, split)
 
-    trainloader_1_8 = torch.utils.data.DataLoader(trainset_1_8, batch_size=128,
+    train_loader = torch.utils.data.DataLoader(trainset, batch_size=128,
                                                 shuffle=True, num_workers=4)
-    trainloader_2_8 = torch.utils.data.DataLoader(trainset_2_8, batch_size=128,
-                                                shuffle=True, num_workers=4)
-    trainloader_3_8 = torch.utils.data.DataLoader(trainset_3_8, batch_size=128,
-                                                shuffle=True, num_workers=4)
-    trainloader_4_8 = torch.utils.data.DataLoader(trainset_4_8, batch_size=128,
-                                                shuffle=True, num_workers=4)
-    trainloader_5_8 = torch.utils.data.DataLoader(trainset_5_8, batch_size=128,
-                                                shuffle=True, num_workers=4)
-    trainloader_6_8 = torch.utils.data.DataLoader(trainset_6_8, batch_size=128,
-                                                shuffle=True, num_workers=4)
-    trainloader_7_8 = torch.utils.data.DataLoader(trainset_7_8, batch_size=128,
-                                                shuffle=True, num_workers=4)
-    trainloader_8_8 = torch.utils.data.DataLoader(train_set_full, batch_size=128,
-                                                shuffle=True, num_workers=4)                                                                                       
+                                                                                          
 
     val_loader = torch.utils.data.DataLoader(
         datasets.CIFAR10(root='./data', train=False, transform=transforms.Compose([
@@ -155,62 +145,68 @@ def main():
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
 
-    if args.half:
-        model.half()
-        criterion.half()
+    # if args.half:
+    #     model.half()
+    #     criterion.half()
 
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
+    norm_optimizer = torch.optim.SGD(norm_model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
-    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
+    norm_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(norm_optimizer,
                                                         milestones=[100, 150], last_epoch=args.start_epoch - 1)
 
-    save_checkpoint({
-            'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
-        }, True, filename=os.path.join(args.save_dir, 'randomizer.th'))
-    return
+    rand_optimizer = torch.optim.SGD(rand_model.parameters(), args.lr,
+                                momentum=args.momentum,
+                                weight_decay=args.weight_decay)
 
-    if args.arch in ['resnet1202', 'resnet110']:
-        # for resnet1202 original paper uses lr=0.01 for first 400 minibatches for warm-up
-        # then switch back. In this setup it will correspond for first epoch.
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = args.lr*0.1
+    rand_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(rand_optimizer,
+                                                        milestones=[100, 150], last_epoch=args.start_epoch - 1)
+
+    # if args.arch in ['resnet1202', 'resnet110']:
+    #     # for resnet1202 original paper uses lr=0.01 for first 400 minibatches for warm-up
+    #     # then switch back. In this setup it will correspond for first epoch.
+    #     for param_group in optimizer.param_groups:
+    #         param_group['lr'] = args.lr*0.1
 
 
-    if args.evaluate:
-        validate(val_loader, model, criterion)
-        return
+    # if args.evaluate:
+    #     validate(val_loader, model, criterion)
+    #     return
 
     for epoch in range(args.start_epoch, args.epochs):
 
         # train for one epoch
-        print('current lr {:.5e}'.format(optimizer.param_groups[0]['lr']))
-        train(train_loader, model, criterion, optimizer, epoch)
-        lr_scheduler.step()
+        print('current lr {:.5e}'.format(norm_optimizer.param_groups[0]['lr']))
+        train(train_loader, gen_net, rand_model, norm_model, criterion, rand_optimizer, norm_optimizer, epoch)
+        norm_lr_scheduler.step()
+        rand_lr_scheduler.step()
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion)
+        prec_rand, prec_norm = validate(val_loader, gen_net, rand_model, norm_model, criterion)
+        
 
         # remember best prec@1 and save checkpoint
-        is_best = prec1 > best_prec1
-        best_prec1 = max(prec1, best_prec1)
-
-        if epoch > 0 and epoch % args.save_every == 0:
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': model.state_dict(),
-                'best_prec1': best_prec1,
-            }, is_best, filename=os.path.join(args.save_dir, 'checkpoint.th'))
-
-        save_checkpoint({
-            'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
-        }, is_best, filename=os.path.join(args.save_dir, 'model.th'))
+        #is_best = prec1 > best_prec1
+        #best_prec1 = max(prec1, best_prec1)
 
 
-def train(train_loader, model, criterion, optimizer, epoch):
+        # save_checkpoint({
+        #     'state_dict': model.state_dict(),
+        #     'best_prec1': best_prec1,
+        # }, is_best, filename=os.path.join(args.save_dir, 'model.th'))
+        
+        # write the data to and save it 
+        print("Epoch: {} Random Test Accuracy: {} Normal Test Accuracy: {}".format(epoch, prec_rand, prec_norm))
+        epoch_list.append(epoch)
+        rand_test_acc_list.append(prec_rand)
+        norm_test_acc_list.append(prec_norm)
+        results_df = pd.DataFrame({'epoch': epoch_list, 'rand_test_acc': rand_test_acc_list,
+                                    'norm_test_acc': norm_test_acc_list})
+        results_df.to_csv('{}_split_accuracy.csv'.format(args.ratio))
+
+
+def train(train_loader, gen_net, rand_model, norm_model, criterion, rand_optimizer, norm_optimizer, epoch):
     """
         Run one train epoch
     """
@@ -220,7 +216,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
     top1 = AverageMeter()
 
     # switch to train mode
-    model.train()
+    norm_model.train()
+    rand_model.train()
 
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
@@ -231,20 +228,31 @@ def train(train_loader, model, criterion, optimizer, epoch):
         target = target.cuda()
         input_var = input.cuda()
         target_var = target
+
+        rand_target = gen_net(input_var)
+
         if args.half:
             input_var = input_var.half()
 
         # compute output
-        output = model(input_var)
-        loss = criterion(output, target_var)
+        rand_output = rand_model(input_var)
+        rand_loss = criterion(rand_output, rand_target)
+
+        norm_output = norm_model(input_var)
+        norm_loss = criterion(norm_output, target_var)
 
         # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        rand_optimizer.zero_grad()
+        rand_loss.backward()
+        rand_optimizer.step()
+
+        norm_optimizer.zero_grad()
+        norm_loss.backward()
+        norm_optimizer.step()
 
         output = output.float()
         loss = loss.float()
+
         # measure accuracy and record loss
         prec1 = accuracy(output.data, target)[0]
         losses.update(loss.item(), input.size(0))
@@ -264,7 +272,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                       data_time=data_time, loss=losses, top1=top1))
 
 
-def validate(val_loader, model, criterion):
+def validate(val_loader, gen_net, rand_model, norm_model, criterion):
     """
     Run evaluation
     """
@@ -273,7 +281,8 @@ def validate(val_loader, model, criterion):
     top1 = AverageMeter()
 
     # switch to evaluate mode
-    model.eval()
+    rand_model.eval()
+    norm_model.eval()
 
     end = time.time()
     with torch.no_grad():
@@ -286,7 +295,7 @@ def validate(val_loader, model, criterion):
                 input_var = input_var.half()
 
             # compute output
-            output = model(input_var)
+            output = rand_model(input_var)
             loss = criterion(output, target_var)
 
             output = output.float()
