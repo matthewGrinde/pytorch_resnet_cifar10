@@ -73,7 +73,7 @@ def main():
     global args, best_prec1
     args = parser.parse_args()
     set_seed(args.seed)
-    epoch_list, rand_test_acc_list, norm_test_acc_list = [], [], []
+    epoch_list, rand_train_acc_list, rand_test_acc_list, norm_train_acc_list, norm_test_acc_list = [], [], []
     # Check the save_dir exists or not
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
@@ -81,6 +81,7 @@ def main():
     # random network to augment the cifar output
     gen_net = torch.nn.DataParallel(resnet.__dict__[args.arch]())
     gen_net.load_state_dict(torch.load('save_resnet20/randomizer.th')['state_dict'])
+    gen_net.cuda()
     gen_net.eval()
 
     # models I will train
@@ -178,7 +179,7 @@ def main():
 
         # train for one epoch
         print('current lr {:.5e}'.format(norm_optimizer.param_groups[0]['lr']))
-        train(train_loader, gen_net, rand_model, norm_model, criterion, rand_optimizer, norm_optimizer, epoch)
+        train_rand, train_norm = train(train_loader, gen_net, rand_model, norm_model, criterion, rand_optimizer, norm_optimizer, epoch)
         norm_lr_scheduler.step()
         rand_lr_scheduler.step()
 
@@ -199,10 +200,12 @@ def main():
         # write the data to and save it 
         print("Epoch: {} Random Test Accuracy: {} Normal Test Accuracy: {}".format(epoch, prec_rand, prec_norm))
         epoch_list.append(epoch)
+        rand_train_acc_list.append(train_rand)
         rand_test_acc_list.append(prec_rand)
+        norm_train_acc_list.append(train_norm)
         norm_test_acc_list.append(prec_norm)
-        results_df = pd.DataFrame({'epoch': epoch_list, 'rand_test_acc': rand_test_acc_list,
-                                    'norm_test_acc': norm_test_acc_list})
+        results_df = pd.DataFrame({'epoch': epoch_list, 'rand_train_acc': rand_train_acc_list, 'rand_test_acc': rand_test_acc_list,
+                                    'norm_train_acc': norm_train_acc_list, 'norm_test_acc': norm_test_acc_list})
         results_df.to_csv('{}_split_accuracy.csv'.format(args.ratio))
 
 
@@ -212,8 +215,10 @@ def train(train_loader, gen_net, rand_model, norm_model, criterion, rand_optimiz
     """
     batch_time = AverageMeter()
     data_time = AverageMeter()
-    losses = AverageMeter()
-    top1 = AverageMeter()
+    losses_norm = AverageMeter()
+    losses_rand = AverageMeter()
+    top1_norm = AverageMeter()
+    top1_rand = AverageMeter()
 
     # switch to train mode
     norm_model.train()
@@ -227,9 +232,8 @@ def train(train_loader, gen_net, rand_model, norm_model, criterion, rand_optimiz
 
         target = target.cuda()
         input_var = input.cuda()
-        target_var = target
 
-        rand_target = gen_net(input_var)
+        rand_target = gen_net(input_var).cuda()
 
         if args.half:
             input_var = input_var.half()
@@ -239,7 +243,7 @@ def train(train_loader, gen_net, rand_model, norm_model, criterion, rand_optimiz
         rand_loss = criterion(rand_output, rand_target)
 
         norm_output = norm_model(input_var)
-        norm_loss = criterion(norm_output, target_var)
+        norm_loss = criterion(norm_output, target)
 
         # compute gradient and do SGD step
         rand_optimizer.zero_grad()
@@ -250,26 +254,40 @@ def train(train_loader, gen_net, rand_model, norm_model, criterion, rand_optimiz
         norm_loss.backward()
         norm_optimizer.step()
 
-        output = output.float()
-        loss = loss.float()
+        #need to fix from here down - pretty much make the output look nice
+
+        output_rand = norm_output.float()
+        loss_rand = rand_loss.float()
 
         # measure accuracy and record loss
-        prec1 = accuracy(output.data, target)[0]
-        losses.update(loss.item(), input.size(0))
-        top1.update(prec1.item(), input.size(0))
+        prec1_rand = accuracy(output_rand.data, target)[0]
+        losses_rand.update(loss_rand.item(), input.size(0))
+        top1_rand.update(prec1_rand.item(), input.size(0))
+
+        output_norm = norm_output.float()
+        loss_norm = norm_loss.float()
+
+        # measure accuracy and record loss
+        prec1_norm = accuracy(output_norm.data, target)[0]
+        losses_norm.update(loss_norm.item(), input.size(0))
+        top1_norm.update(prec1_norm.item(), input.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i % args.print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
-                      epoch, i, len(train_loader), batch_time=batch_time,
-                      data_time=data_time, loss=losses, top1=top1))
+
+
+        # if i % args.print_freq == 0:
+        #     print('Epoch: [{0}][{1}/{2}]\t'
+        #           'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+        #           'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+        #           'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+        #           'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
+        #               epoch, i, len(train_loader), batch_time=batch_time,
+        #               data_time=data_time, loss=losses, top1=top1))
+    
+    return top1_rand.avg, top1_norm.avg
 
 
 def validate(val_loader, gen_net, rand_model, norm_model, criterion):
@@ -278,7 +296,8 @@ def validate(val_loader, gen_net, rand_model, norm_model, criterion):
     """
     batch_time = AverageMeter()
     losses = AverageMeter()
-    top1 = AverageMeter()
+    top1_rand = AverageMeter()
+    top1_norm = AverageMeter()
 
     # switch to evaluate mode
     rand_model.eval()
@@ -290,38 +309,44 @@ def validate(val_loader, gen_net, rand_model, norm_model, criterion):
             target = target.cuda()
             input_var = input.cuda()
             target_var = target.cuda()
+            rand_target = gen_net(input_var).cuda
 
             if args.half:
                 input_var = input_var.half()
 
             # compute output
-            output = rand_model(input_var)
-            loss = criterion(output, target_var)
+            rand_output = rand_model(input_var)
+            rand_loss = criterion(rand_output, rand_target)
+
+            norm_output = norm_model(input_var)
+            norm_loss = criterion(norm_output, target_var)
 
             output = output.float()
             loss = loss.float()
 
             # measure accuracy and record loss
-            prec1 = accuracy(output.data, target)[0]
+            prec_rand = accuracy(output.data, target)[0]
+            prec_norm = accuracy(output.data, target)[0]
             losses.update(loss.item(), input.size(0))
-            top1.update(prec1.item(), input.size(0))
+            top1_rand.update(prec_rand.item(), input.size(0))
+            top1_norm.update(prec_norm.item(), input.size(0))
 
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
 
-            if i % args.print_freq == 0:
-                print('Test: [{0}/{1}]\t'
-                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
-                          i, len(val_loader), batch_time=batch_time, loss=losses,
-                          top1=top1))
+            # if i % args.print_freq == 0:
+            #     print('Test: [{0}/{1}]\t'
+            #           'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+            #           'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+            #           'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
+            #               i, len(val_loader), batch_time=batch_time, loss=losses,
+            #               top1=top1))
 
-    print(' * Prec@1 {top1.avg:.3f}'
-          .format(top1=top1))
+    # print(' * Prec@1 {top1.avg:.3f}'
+    #       .format(top1=top1))
 
-    return top1.avg
+    return top1_rand.avg, top1_norm.avg
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     """
